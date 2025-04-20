@@ -1,0 +1,211 @@
+const express = require('express');
+const router = express.Router();
+const auth = require('../middleware/auth');
+const Transaction = require('../models/Transaction');
+const Category = require('../models/Category');
+
+// Helper function to get date range based on period
+const getDateRange = (period, startDate, endDate) => {
+    const today = new Date();
+    let start, end;
+
+    switch (period) {
+        case 'week':
+            start = new Date(today.setDate(today.getDate() - 7));
+            end = new Date();
+            break;
+        case 'month':
+            start = new Date(today.getFullYear(), today.getMonth(), 1);
+            end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+            break;
+        case 'quarter':
+            const quarter = Math.floor(today.getMonth() / 3);
+            start = new Date(today.getFullYear(), quarter * 3, 1);
+            end = new Date(today.getFullYear(), (quarter + 1) * 3, 0);
+            break;
+        case 'year':
+            start = new Date(today.getFullYear(), 0, 1);
+            end = new Date(today.getFullYear(), 11, 31);
+            break;
+        case 'custom':
+            start = new Date(startDate);
+            end = new Date(endDate);
+            break;
+        default:
+            start = new Date(today.getFullYear(), today.getMonth(), 1);
+            end = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    }
+
+    return { start, end };
+};
+
+// Get summary data
+router.get('/summary', auth, async (req, res) => {
+    try {
+        const { period, startDate, endDate } = req.query;
+        const { start, end } = getDateRange(period, startDate, endDate);
+
+        const transactions = await Transaction.find({
+            userId: req.user._id,
+            date: { $gte: start, $lte: end }
+        }).populate('category');
+
+        const totalIncome = transactions
+            .filter(t => t.type === 'income')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+        const totalExpenses = transactions
+            .filter(t => t.type === 'expense')
+            .reduce((sum, t) => sum + t.amount, 0);
+
+        res.json({
+            totalIncome,
+            totalExpenses,
+            balance: totalIncome - totalExpenses
+        });
+    } catch (error) {
+        console.error('Summary data error:', error);
+        res.status(500).json({ message: 'Error fetching summary data' });
+    }
+});
+
+// Get income vs expenses data
+router.get('/income-expense', auth, async (req, res) => {
+    try {
+        const { period, startDate, endDate } = req.query;
+        const { start, end } = getDateRange(period, startDate, endDate);
+
+        const transactions = await Transaction.find({
+            userId: req.user._id,
+            date: { $gte: start, $lte: end }
+        });
+
+        const incomeExpenseData = [
+            {
+                name: 'Income',
+                value: transactions
+                    .filter(t => t.type === 'income')
+                    .reduce((sum, t) => sum + t.amount, 0)
+            },
+            {
+                name: 'Expenses',
+                value: transactions
+                    .filter(t => t.type === 'expense')
+                    .reduce((sum, t) => sum + t.amount, 0)
+            }
+        ];
+
+        res.json(incomeExpenseData);
+    } catch (error) {
+        console.error('Income vs Expenses data error:', error);
+        res.status(500).json({ message: 'Error fetching income vs expenses data' });
+    }
+});
+
+// Get category-wise spending data
+router.get('/category-spending', auth, async (req, res) => {
+    try {
+        const { period, startDate, endDate } = req.query;
+        const { start, end } = getDateRange(period, startDate, endDate);
+
+        const transactions = await Transaction.find({
+            userId: req.user._id,
+            type: 'expense',
+            date: { $gte: start, $lte: end }
+        }).populate('category');
+
+        const categorySpending = {};
+        transactions.forEach(t => {
+            const categoryName = t.category ? t.category.name : 'Uncategorized';
+            categorySpending[categoryName] = (categorySpending[categoryName] || 0) + t.amount;
+        });
+
+        res.json(
+            Object.entries(categorySpending).map(([name, amount]) => ({
+                name,
+                amount
+            }))
+        );
+    } catch (error) {
+        console.error('Category spending data error:', error);
+        res.status(500).json({ message: 'Error fetching category spending data' });
+    }
+});
+
+// Get filtered transactions with pagination
+router.get('/transactions', auth, async (req, res) => {
+    try {
+        const { 
+            page = 1, 
+            limit = 10,
+            startDate,
+            endDate,
+            category,
+            minAmount,
+            maxAmount,
+            type
+        } = req.query;
+
+        const query = { userId: req.user._id };
+
+        // Date filter
+        if (startDate && endDate) {
+            // Ensure dates are in proper format and timezone
+            const start = new Date(startDate);
+            const end = new Date(endDate);
+            // Set end date to end of day
+            end.setHours(23, 59, 59, 999);
+            
+            query.date = {
+                $gte: start,
+                $lte: end
+            };
+        }
+
+        // Category filter
+        if (category) {
+            const categoryDoc = await Category.findOne({ 
+                userId: req.user._id,
+                name: category 
+            });
+            if (categoryDoc) {
+                query.category = categoryDoc._id;
+            }
+        }
+
+        // Amount range filter
+        if (minAmount || maxAmount) {
+            query.amount = {};
+            if (minAmount) query.amount.$gte = parseFloat(minAmount);
+            if (maxAmount) query.amount.$lte = parseFloat(maxAmount);
+        }
+
+        // Type filter
+        if (type) {
+            query.type = type;
+        }
+
+        const skip = (page - 1) * limit;
+
+        const [transactions, total] = await Promise.all([
+            Transaction.find(query)
+                .populate('category')
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(parseInt(limit)),
+            Transaction.countDocuments(query)
+        ]);
+
+        res.json({
+            transactions,
+            total,
+            page: parseInt(page),
+            pages: Math.ceil(total / limit)
+        });
+    } catch (error) {
+        console.error('Transactions data error:', error);
+        res.status(500).json({ message: 'Error fetching transactions' });
+    }
+});
+
+module.exports = router; 
