@@ -1,6 +1,11 @@
 # Personal Budget Tracker
 
 A comprehensive personal finance management application that helps users track their income, expenses, and financial goals.
+🔑 Credentials
+Test Account: (For review purposes only)
+📧 Email: ashutosh@gmail.com
+🔒 Password: 123456
+
 
 ## Table of Contents
 - [Features](#features)
@@ -173,3 +178,5 @@ All code has been reviewed and understood by the developer, and the developer is
 
 ## License
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+
